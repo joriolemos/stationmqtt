@@ -1,11 +1,33 @@
 // * COMUNICAÇÃO DE DADOS - JORIO LEMOS 2023_1 *
 
+// Biblio Tela Nextion
 #include "Nextion.h"
+
+// Bibliotecas de conectividade
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
+#include <WiFiClientSecure.h>
+
+// Bibliotecas do Sensor BME280
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
+
+// Bibliotecas auxiliares de publicação
+#include <ArduinoJson.h>
+#include <PubSubClient.h>
+
+// Biblioteca NTP
+#include <NTPClient.h>
+#include <Arduino.h>
+
+// Configurações de relógio on-line
+WiFiUDP udp;
+NTPClient ntp(udp, "a.st1.ntp.br", -3 * 3600, 60000); // Cria um objeto "NTP" com as configurações.
+
+// Led teste
+const int led = 5;
+#define LED_BUILTIN 2
 
 /* Pressao referencia da estacao*/
 #define SEALEVELPRESSURE_HPA (1014.0)
@@ -13,16 +35,83 @@
 Adafruit_BME280 bme;
 float temperature, humidity, pressure, altitude;
 
-/*Put your SSID & Password*/
-const char* ssid = "PH";  // Enter SSID here
-const char* password = "21216435";  //Enter Password here
+/*SSID & Password VIVOFIBRA-46B1 ufKBrTWp8p */
+const char* ssid = "PH";
+const char* password = "21216435";
 
-void connectToWifi(){
+//---- MQTT Broker
+const char* mqtt_server      = "78302af2bede4fe6a6c4dda424e3a851.s1.eu.hivemq.cloud";
+const char* mqtt_username    = "joriolemos";
+const char* mqtt_password    = "Jo@0509_rio";
+const int   mqtt_port        = 8883;
 
-  Serial.println("Connecting to ");
+/**** Secure WiFi Connectivity Initialisation *****/
+WiFiClientSecure espClient;
+
+/**** MQTT Client Initialisation Using WiFi Connection *****/
+PubSubClient client(espClient);
+
+unsigned long lastMsg = 0;
+#define MSG_BUFFER_SIZE (50)
+char msg[MSG_BUFFER_SIZE];
+
+
+/****** root certificate *********/
+
+static const char *root_ca PROGMEM = R"EOF(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+)EOF";
+
+void timeupdate() {
+  if (ntp.update()) {
+    Serial.print("DATA/HORA: ");
+    Serial.println(ntp.getFormattedDate());
+
+    Serial.print("HORARIO: ");
+    Serial.println(ntp.getFormattedTime());
+  } else {
+    Serial.println("!Erro ao atualizar NTP!\n");
+  }
+}
+
+void setup_wifi(){
+
+  delay(10);
+  Serial.println("\nConnecting to ");
   Serial.println(ssid);
 
   //connect to your local wi-fi network
+  WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
 
   //check wi-fi is connected to wi-fi network
@@ -30,11 +119,55 @@ void connectToWifi(){
     delay(500);
     Serial.print(".");
   }
+
+  randomSeed(micros());
   Serial.println("");
   Serial.println("WiFi connected..!");
   Serial.print("Got IP: ");  Serial.println(WiFi.localIP());
-  delay(5000);
+}
 
+/************* Connect to MQTT Broker ***********/
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    String clientId = "ESP32Client-";   // Create a random client ID
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str(), mqtt_username, mqtt_password)) {
+      Serial.println("connected");
+
+      client.subscribe("led_state");   // subscribe the topics here
+
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");   // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+/***** Call back Method for Receiving MQTT messages and Switching LED ****/
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String incommingMessage = "";
+  for (int i = 0; i < length; i++) incommingMessage+=(char)payload[i];
+
+  Serial.println("Message arrived ["+String(topic)+"]"+incommingMessage);
+
+  //--- check the incomming message
+    if( strcmp(topic,"led_state") == 0){
+     if (incommingMessage.equals("1")) digitalWrite(led, HIGH);   // Turn the LED on
+     else digitalWrite(led, LOW);  // Turn the LED off
+  }
+
+}
+
+/**** Method for Publishing MQTT Messages **********/
+void publishMessage(const char* topic, String payload , boolean retained){
+  if (client.publish(topic, payload.c_str(), true))
+      Serial.println("Message publised ["+String(topic)+"]: "+payload);
 }
 
 WebServer server(80);
@@ -51,8 +184,6 @@ NexDSButton bt0 = NexDSButton(0, 15, "bt0");
 uint32_t next, myInt0, myInt1, myInt2, myInt3 = 0;
 uint32_t dual_state;
 uint32_t L_Temp, L_Humi, L_Pres, L_Alti;
-
-#define LED_BUILTIN 2
 
 // Daddos dos parametros para o Display local
 void do_every_so_often() {
@@ -71,13 +202,20 @@ void setup() {
   //
   nexInit();
   pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(led, OUTPUT);
   next = millis();
 
   Serial.begin(115200);
   delay(100);
 
   bme.begin(0x77);
-  connectToWifi();
+  setup_wifi();
+  ntp.begin();
+
+  espClient.setInsecure();
+
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
 
   server.on("/", handle_OnConnect);
   server.onNotFound(handle_NotFound);
@@ -106,13 +244,62 @@ void handle_NotFound() {
 //######################################## Loop begin!
 
 void loop() {
-  delay(2000);
+
+  timeupdate();
+
+  String dataString = ntp.getFormattedDate();
+
+  // Extrai o ano, mês e dia
+  String ano = dataString.substring(0, 4);
+  String mes = dataString.substring(5, 7);
+  String dia = dataString.substring(8, 10);
+
+  // Reorganiza no formato "DD/MM/AAAA"
+  String dataFormatada = dia + "/" + mes + "/" + ano;
+
+  String horario = ntp.getFormattedTime();
+
+  if (!client.connected()) reconnect(); // check if client is connected
+  client.loop();
+
+  // Definindo o tamanho do buffer para armazenar o JSON
+  const size_t capacity = JSON_OBJECT_SIZE(8) + 200;
+
+  DynamicJsonDocument doc(capacity);
 
   // Dados dos parametros para o monitor serial
-  L_Temp = bme.readTemperature();
-  L_Humi = bme.readHumidity();
-  L_Pres = bme.readPressure() / 100.0F;
-  L_Alti = bme.readAltitude(SEALEVELPRESSURE_HPA);
+
+  float L_Temp = bme.readTemperature();
+  float L_Humi = bme.readHumidity();
+  float L_Pres = bme.readPressure() / 100.0F;
+  float L_Alti = bme.readAltitude(SEALEVELPRESSURE_HPA);
+
+  client.publish("joriolemos/Temperatura", String(L_Temp).c_str());
+  client.publish("joriolemos/Umidade", String(L_Humi).c_str());
+  client.publish("joriolemos/Pressao", String(L_Pres).c_str());
+  client.publish("joriolemos/Altitude", String(L_Alti).c_str());    
+
+// Limitando os valores para duas casas decimais
+  L_Temp = roundf(L_Temp * 100) / 100; // Limita para 2 casas decimais
+  L_Humi = roundf(L_Humi * 100) / 100; // Limita para 2 casas decimais
+  L_Pres = roundf(L_Pres * 100) / 100; // Limita para 2 casas decimais
+  L_Alti = roundf(L_Alti * 100) / 100; // Limita para 2 casas decimais
+
+// Montando o documento JSON
+  doc["deviceId"]     = "ESP32 DEVIKT V1";
+  doc["siteId"]       = "IFES";
+  doc["Data"]         = dataFormatada;
+  doc["Horario"]      = horario;
+  doc["Temperatura"]  = float(L_Temp); // Convertendo para float
+  doc["Umidade"]      = float(L_Humi); // Convertendo para float
+  doc["Pressão"]      = float(L_Pres); // Convertendo para float
+  doc["Altitude"]     = float(L_Alti); // Convertendo para float
+
+  char mqtt_message[256];
+  serializeJson(doc, mqtt_message);
+
+  publishMessage("Esp32_data", mqtt_message, true);
+
   Serial.println("");
   Serial.println("Dados dos Sensor");
   Serial.println(L_Temp);
@@ -132,6 +319,9 @@ void loop() {
   } else {
     digitalWrite(LED_BUILTIN, LOW);
   }
+
+  delay(5000);
+
 }
 
 // Publicação HTML com Webserver local
